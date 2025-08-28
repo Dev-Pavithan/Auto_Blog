@@ -106,7 +106,7 @@ class BlogController extends Controller
     /**
      * Store a newly created blog post.
      */
-     public function store(Request $request)
+    public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
             'article_title' => 'required|string|max:' . $this->facebookLimits['title'],
@@ -208,7 +208,6 @@ class BlogController extends Controller
         return response()->json($blog, 201);
     }
 
-
     /**
      * Validate blog content for social media publishing
      */
@@ -253,13 +252,17 @@ class BlogController extends Controller
             'article_long_desc' => 'sometimes|required|string|max:' . $this->facebookLimits['content'],
             'article_image' => 'sometimes|nullable|url',
             'article_video_url' => 'sometimes|nullable|url',
+            'article_document' => 'sometimes|nullable|file|mimes:pdf,doc,docx,txt,ppt,pptx,xls,xlsx|max:10240',
             'article_status' => 'sometimes|required|in:deactive,active,published',
             'social_media_platforms' => 'nullable|array',
             'social_media_platforms.*' => 'in:' . implode(',', $this->socialMediaPlatforms)
         ], [
             'article_title.max' => 'The title must not exceed ' . $this->facebookLimits['title'] . ' characters for Facebook compatibility.',
             'article_short_desc.max' => 'The short description must not exceed ' . $this->facebookLimits['description'] . ' characters for Facebook compatibility.',
-            'article_long_desc.max' => 'The content must not exceed ' . $this->facebookLimits['content'] . ' characters for Facebook compatibility.'
+            'article_long_desc.max' => 'The content must not exceed ' . $this->facebookLimits['content'] . ' characters for Facebook compatibility.',
+            'article_document.file' => 'The article document must be a file upload.',
+            'article_document.mimes' => 'The document must be a PDF, Word, Text, PowerPoint, or Excel file.',
+            'article_document.max' => 'The document must not exceed 10MB in size.'
         ]);
 
         if ($validator->fails()) {
@@ -295,6 +298,24 @@ class BlogController extends Controller
             'article_status'
         ]);
         
+        // Handle document upload if provided
+        if ($request->hasFile('article_document')) {
+            // Delete old document if it exists and is a local file
+            if ($blog->article_document && !filter_var($blog->article_document, FILTER_VALIDATE_URL)) {
+                $this->deleteDocument($blog->article_document);
+            }
+            
+            // Upload new document
+            $articleDocumentPath = $this->handleDocumentUpload($request->file('article_document'));
+            $validData['article_document'] = $articleDocumentPath;
+        } else if ($request->has('article_document') && $request->article_document === null) {
+            // Handle document removal
+            if ($blog->article_document && !filter_var($blog->article_document, FILTER_VALIDATE_URL)) {
+                $this->deleteDocument($blog->article_document);
+            }
+            $validData['article_document'] = null;
+        }
+        
         // Update slug if title changes
         if ($request->has('article_title') && $request->article_title !== $blog->article_title) {
             $slug = Str::slug($request->article_title);
@@ -326,7 +347,7 @@ class BlogController extends Controller
             if (!empty($socialMediaPlatforms)) {
                 Log::info("Attempting to publish blog ID {$blog->id} to social media platforms: " . implode(', ', $socialMediaPlatforms));
                 
-                // FIX: Use the blog data for validation, not request data
+                // Use the blog data for validation, not request data
                 $validationResult = $this->validateBlogForSocialMedia($blog, $validData);
                 if ($validationResult !== true) {
                     return $validationResult;
@@ -363,7 +384,7 @@ class BlogController extends Controller
     }
 
     /**
-     * Validate blog content for social media publishing (FIXED VERSION)
+     * Validate blog content for social media publishing
      */
     private function validateBlogForSocialMedia(Blog $blog, array $updateData = [])
     {
@@ -399,85 +420,87 @@ class BlogController extends Controller
         return true;
     }
 
-
-
-    // Add this method to your BlogController
-private function verifySocialMediaCredentials(array $platforms)
-{
-    foreach ($platforms as $platform) {
-        $verification = $this->socialMediaService->verifyCredentials($platform);
-        if (!$verification) {
-            Log::error("Failed to verify credentials for platform: {$platform}");
-            return false;
-        }
-        Log::info("Verified credentials for {$platform}: " . json_encode($verification));
-    }
-    return true;
-}
-
-// Then update your publishToSocialMedia method:
-private function publishToSocialMedia(Blog $blog, array $platforms)
-{
-    try {
-        Log::info("Starting social media publishing for blog ID: {$blog->id} to platforms: " . implode(', ', $platforms));
-        
-        // Verify credentials first
-        if (!$this->verifySocialMediaCredentials($platforms)) {
-            Log::error('Social media credential verification failed');
-            return false;
-        }
-
-        $successCount = 0;
-        
+    /**
+     * Verify social media credentials
+     */
+    private function verifySocialMediaCredentials(array $platforms)
+    {
         foreach ($platforms as $platform) {
-            Log::info("Attempting to publish to {$platform} for blog: {$blog->id}");
-            
-            // Generate URL that works for social media (avoid localhost)
-            $socialMediaUrl = url('/blog/' . $blog->slug);
-            if (str_contains($socialMediaUrl, 'localhost')) {
-                // For development, use a placeholder or skip URL
-                $socialMediaUrl = null;
+            $verification = $this->socialMediaService->verifyCredentials($platform);
+            if (!$verification) {
+                Log::error("Failed to verify credentials for platform: {$platform}");
+                return false;
             }
-            
-            // Generate proper document URL for social media
-            $documentUrl = null;
-            if ($blog->article_document && !filter_var($blog->article_document, FILTER_VALIDATE_URL)) {
-                // Convert storage path to public URL
-                $filename = basename($blog->article_document);
-                $documentUrl = url('/api/documents/' . $filename);
-            } else {
-                $documentUrl = $blog->article_document;
-            }
-            
-            $result = $this->socialMediaService->publish($platform, [
-                'title' => $blog->article_title,
-                'type' => $blog->article_type,
-                'description' => $blog->article_short_desc,
-                'content' => $blog->article_long_desc,
-                'image' => $blog->article_image,
-                'video_url' => $blog->article_video_url,
-                'document' => $documentUrl,
-                'url' => $socialMediaUrl,
-                'slug' => $blog->slug
-            ]);
-            
-            if ($result) {
-                $successCount++;
-                Log::info("Successfully published to {$platform} for blog: {$blog->id}. Result: " . json_encode($result));
-            } else {
-                Log::warning("Failed to publish to {$platform} for blog: {$blog->id}");
-            }
+            Log::info("Verified credentials for {$platform}: " . json_encode($verification));
         }
-
-        Log::info("Social media publishing completed. Success count: {$successCount} out of " . count($platforms));
-        return $successCount > 0;
-
-    } catch (\Exception $e) {
-        Log::error('Social media publishing failed: ' . $e->getMessage());
-        Log::error('Stack trace: ' . $e->getTraceAsString());
-        return false;
+        return true;
     }
-}
+
+    /**
+     * Publish to social media
+     */
+    private function publishToSocialMedia(Blog $blog, array $platforms)
+    {
+        try {
+            Log::info("Starting social media publishing for blog ID: {$blog->id} to platforms: " . implode(', ', $platforms));
+            
+            // Verify credentials first
+            if (!$this->verifySocialMediaCredentials($platforms)) {
+                Log::error('Social media credential verification failed');
+                return false;
+            }
+
+            $successCount = 0;
+            
+            foreach ($platforms as $platform) {
+                Log::info("Attempting to publish to {$platform} for blog: {$blog->id}");
+                
+                // Generate URL that works for social media (avoid localhost)
+                $socialMediaUrl = url('/blog/' . $blog->slug);
+                if (str_contains($socialMediaUrl, 'localhost')) {
+                    // For development, use a placeholder or skip URL
+                    $socialMediaUrl = null;
+                }
+                
+                // Generate proper document URL for social media
+                $documentUrl = null;
+                if ($blog->article_document && !filter_var($blog->article_document, FILTER_VALIDATE_URL)) {
+                    // Convert storage path to public URL
+                    $filename = basename($blog->article_document);
+                    $documentUrl = url('/api/documents/' . $filename);
+                } else {
+                    $documentUrl = $blog->article_document;
+                }
+                
+                $result = $this->socialMediaService->publish($platform, [
+                    'title' => $blog->article_title,
+                    'type' => $blog->article_type,
+                    'description' => $blog->article_short_desc,
+                    'content' => $blog->article_long_desc,
+                    'image' => $blog->article_image,
+                    'video_url' => $blog->article_video_url,
+                    'document' => $documentUrl,
+                    'url' => $socialMediaUrl,
+                    'slug' => $blog->slug
+                ]);
+                
+                if ($result) {
+                    $successCount++;
+                    Log::info("Successfully published to {$platform} for blog: {$blog->id}. Result: " . json_encode($result));
+                } else {
+                    Log::warning("Failed to publish to {$platform} for blog: {$blog->id}");
+                }
+            }
+
+            Log::info("Social media publishing completed. Success count: {$successCount} out of " . count($platforms));
+            return $successCount > 0;
+
+        } catch (\Exception $e) {
+            Log::error('Social media publishing failed: ' . $e->getMessage());
+            Log::error('Stack trace: ' . $e->getTraceAsString());
+            return false;
+        }
+    }
 
     /**
      * Update the document of the specified blog post.
@@ -551,7 +574,7 @@ private function publishToSocialMedia(Blog $blog, array $platforms)
         }
         
         $blogs = Blog::where('article_status', $status)
-            ->orderBy('created_at', 'desc')
+            .orderBy('created_at', 'desc')
             ->paginate(10);
             
         return response()->json($blogs);
@@ -646,7 +669,9 @@ private function publishToSocialMedia(Blog $blog, array $platforms)
     {
         $fileName = time() . '_' . $file->getClientOriginalName();
         $filePath = $file->storeAs('documents', $fileName, 'public');
-        return Storage::url($filePath);
+        
+        // Return the API URL format instead of storage URL
+        return url('/api/documents/' . $fileName);
     }
 
     /**
@@ -654,8 +679,19 @@ private function publishToSocialMedia(Blog $blog, array $platforms)
      */
     private function deleteDocument($documentPath)
     {
-        $filePath = str_replace('/storage/', '', $documentPath);
-        Storage::disk('public')->delete($filePath);
+        try {
+            // Extract the filename from the URL
+            $filename = basename($documentPath);
+            
+            if (Storage::disk('public')->exists('documents/' . $filename)) {
+                Storage::disk('public')->delete('documents/' . $filename);
+                Log::info("Deleted document: documents/{$filename}");
+            } else {
+                Log::warning("Document file not found: documents/{$filename}");
+            }
+        } catch (\Exception $e) {
+            Log::error("Error deleting document: " . $e->getMessage());
+        }
     }
 
     /**
@@ -672,5 +708,19 @@ private function publishToSocialMedia(Blog $blog, array $platforms)
     private function getAllowedTransitions($currentStatus)
     {
         return implode(', ', $this->statusTransitions[$currentStatus]);
+    }
+
+    /**
+     * Serve document files via API endpoint
+     */
+    public function serveDocument($filename)
+    {
+        $filePath = 'documents/' . $filename;
+        
+        if (!Storage::disk('public')->exists($filePath)) {
+            abort(404, 'File not found');
+        }
+        
+        return response()->file(Storage::disk('public')->path($filePath));
     }
 }

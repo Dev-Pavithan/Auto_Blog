@@ -56,17 +56,14 @@ class SocialMediaService
         $message = $this->formatFacebookPostComplete($content);
 
         // Build URL - always include if available
-        $linkUrl = null;
-        if (!empty($content['url'])) {
-            $linkUrl = $content['url'];
-        }
+        $linkUrl = !empty($content['url']) ? $this->makeAbsoluteUrl($content['url']) : null;
 
         // Handle image
         $imageUrl = null;
         if (!empty($content['image'])) {
             $img = $content['image'];
-            if (Str::startsWith($img, ['/storage', 'storage'])) {
-                $img = url($img);
+            if (Str::startsWith($img, ['/storage', 'storage', '/api'])) {
+                $img = $this->makeAbsoluteUrl($img);
             }
             $imageUrl = $img;
         }
@@ -134,7 +131,7 @@ class SocialMediaService
     private function publishFacebookTextPost($pageId, $accessToken, $message, $linkUrl = null)
     {
         $postData = [
-            'message' => $message,
+            'message' => $message, // contains real newlines now
             'access_token' => $accessToken,
         ];
 
@@ -155,6 +152,7 @@ class SocialMediaService
 
     /**
      * Format Facebook post content - COMPLETE VERSION with all information
+     * Also converts any literal "\n" in incoming text to real line breaks.
      */
     private function formatFacebookPostComplete(array $content)
     {
@@ -162,95 +160,143 @@ class SocialMediaService
 
         // Title
         if (!empty($content['title'])) {
-            $lines[] = $content['title'];
+            $lines[] = $this->normalizeText($content['title']);
         }
 
         // Type
         if (!empty($content['type'])) {
-            $lines[] = ucfirst($content['type']);
+            $lines[] = $this->normalizeText(ucfirst($content['type']));
         }
 
         // Short description
         if (!empty($content['description'])) {
-            $lines[] = $content['description'];
+            $lines[] = $this->normalizeText($content['description']);
         }
 
         // Long content - include as much as possible
         if (!empty($content['content'])) {
-            $cleanedContent = trim(strip_tags($content['content']));
-            
-            // Remove excessive line breaks and whitespace but preserve paragraphs
-            $cleanedContent = preg_replace('/\s+/', ' ', $cleanedContent);
-            
+            $cleanedContent = strip_tags((string) $content['content']);
+            $cleanedContent = html_entity_decode($cleanedContent, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            $cleanedContent = $this->normalizeText($cleanedContent);
+
             // Include more content (increased character limit)
-            $contentExtract = $this->extractMeaningfulContent($cleanedContent, 5000); 
-            
+            $contentExtract = $this->extractMeaningfulContent($cleanedContent, 5000);
             if ($contentExtract) {
                 $lines[] = $contentExtract;
             }
         }
 
-        // Add video URL if available
+        // Video URL (as-is)
         if (!empty($content['video_url'])) {
-            $lines[] = "Watch video: " . $content['video_url'];
+            $lines[] = "Watch video: " . $this->formatUrlForDisplay($content['video_url']);
         }
 
-        // Add document URL if available
+        // Document URL on its own line (absolute)
         if (!empty($content['document'])) {
-            $lines[] = "Download document: " . $content['document'];
+            $docUrl = $this->makeAbsoluteUrl($content['document']);
+            $lines[] = "Download document: " . $this->formatUrlForDisplay($docUrl);
         }
 
-        // Add main URL if available
+        // Main article URL
         if (!empty($content['url'])) {
-            $lines[] = "Read full article: " . $content['url'];
+            $lines[] = "Read full article: " . $this->formatUrlForDisplay($this->makeAbsoluteUrl($content['url']));
         }
 
-        // Join with proper spacing
-        $finalMessage = implode("\n\n", array_filter($lines));
-        
-        // Ensure we don't exceed Facebook's limit but include more content
+        // Join with real blank lines between sections
+        $finalMessage = implode("\n\n", array_filter($lines, fn($v) => $v !== '' && $v !== null));
+
+        // Keep within Facebook's hard limit
         if (strlen($finalMessage) > 63000) {
             $finalMessage = substr($finalMessage, 0, 62997) . '...';
         }
-        
+
         return $finalMessage;
     }
 
     /**
-     * Extract meaningful content with better handling
+     * Convert literal escapes to real characters and tidy whitespace/newlines
+     */
+    private function normalizeText(string $text): string
+    {
+        // Convert literal sequences \r\n, \n, \r, \t to real characters
+        $text = str_replace(
+            ['\\r\\n', '\\n\\r', '\\n', '\\r', '\\t'],
+            ["\n", "\n", "\n", "\n", "    "],
+            $text
+        );
+
+        // Normalize any CR to LF
+        $text = preg_replace("/\r\n|\r/", "\n", $text);
+
+        // Trim spaces on each line
+        $text = preg_replace("/[ \t]+/", ' ', $text);
+
+        // Collapse 3+ newlines to exactly 2 (paragraph spacing)
+        $text = preg_replace("/\n{3,}/", "\n\n", $text);
+
+        // Trim overall
+        return trim($text);
+    }
+
+    /**
+     * Make relative app URLs absolute for Facebook (images/docs)
+     */
+    private function makeAbsoluteUrl(string $url): string
+    {
+        // If it's already absolute, return as-is
+        if (preg_match('/^https?:\/\//i', $url)) {
+            return $url;
+        }
+        // Use Laravel helper to build absolute URL
+        return url($url);
+    }
+
+    /**
+     * Format URL for clean display in Facebook posts
+     */
+    private function formatUrlForDisplay($url)
+    {
+        // If it's YouTube, return as is
+        if (str_contains($url, 'youtu.be') || str_contains($url, 'youtube.com')) {
+            return $url;
+        }
+
+        // For API document links, just show the URL (Facebook will make it clickable)
+        if (str_contains($url, '/api/documents/')) {
+            return $url;
+        }
+
+        return $url;
+    }
+
+    /**
+     * Extract meaningful content while respecting paragraph boundaries
      */
     private function extractMeaningfulContent($content, $maxLength = 2000)
     {
-        // If content is already short enough, return it
         if (strlen($content) <= $maxLength) {
             return $content;
         }
-        
-        // Try to find a good breaking point at paragraph or sentence end
+
         $truncated = substr($content, 0, $maxLength);
-        
-        // Find the last paragraph break
-        $lastParagraph = strrpos($truncated, "\n\n");
-        
-        // Find the last sentence ending
-        $lastPeriod = strrpos($truncated, '. ');
-        $lastQuestion = strrpos($truncated, '? ');
+
+        // Find good breakpoints
+        $lastParagraph   = strrpos($truncated, "\n\n");
+        $lastPeriod      = strrpos($truncated, '. ');
+        $lastQuestion    = strrpos($truncated, '? ');
         $lastExclamation = strrpos($truncated, '! ');
-        
-        $breakPoints = array_filter([$lastParagraph, $lastPeriod, $lastQuestion, $lastExclamation]);
-        
-        if (!empty($breakPoints)) {
-            $lastBreakPoint = max($breakPoints);
-            
-            // Add some buffer to include the ending punctuation
-            if ($lastBreakPoint === $lastPeriod || $lastBreakPoint === $lastQuestion || $lastBreakPoint === $lastExclamation) {
-                $lastBreakPoint += 1; // Include the space after punctuation
+
+        $candidates = array_filter([$lastParagraph, $lastPeriod, $lastQuestion, $lastExclamation], fn($v) => $v !== false);
+
+        if (!empty($candidates)) {
+            $lastBreak = max($candidates);
+            // If we broke on sentence punctuation, include the space after it
+            if (in_array($lastBreak, [$lastPeriod, $lastQuestion, $lastExclamation], true)) {
+                $lastBreak += 1;
             }
-            
-            return substr($content, 0, $lastBreakPoint);
+            return substr($content, 0, $lastBreak);
         }
-        
-        // If no good break point found, just truncate and add ellipsis
+
         return substr($content, 0, $maxLength) . '...';
     }
 
@@ -263,7 +309,6 @@ class SocialMediaService
             $configuredToken = config('services.facebook.access_token');
             $configuredPageId = config('services.facebook.page_id');
 
-            // Try to get pages for this user
             $response = Http::get("https://graph.facebook.com/me/accounts", [
                 'access_token' => $configuredToken,
                 'fields' => 'id,name,access_token'
@@ -272,78 +317,20 @@ class SocialMediaService
             if ($response->successful()) {
                 $pages = $response->json()['data'] ?? [];
 
-                // Find the configured page or use first page
                 foreach ($pages as $page) {
                     if ($configuredPageId && $page['id'] === $configuredPageId) {
                         return $page['access_token'];
                     }
                 }
 
-                // Return first page token if no specific page configured
                 if (!empty($pages)) {
-                    return $pages[0]['access_token'];
+                    return $pages[0]['access_token']; // FIX: correct indexing
                 }
             }
 
             Log::error('Failed to get Facebook page access token');
             return null;
         });
-    }
-
-
-
-    /**
-     * Format Facebook post content - CLEAN VERSION (no emojis)
-     * Facebook has a 63206 character limit for posts
-     */
-    private function formatFacebookPostClean(array $content)
-    {
-        $lines = [];
-
-        // Title
-        if (!empty($content['title'])) {
-            $lines[] = $content['title'];
-        }
-
-        // Type
-        if (!empty($content['type'])) {
-            $lines[] = ucfirst($content['type']);
-        }
-
-        // Short description
-        if (!empty($content['description'])) {
-            $lines[] = $content['description'];
-        }
-
-        // Long content - optimized for Facebook
-        if (!empty($content['content'])) {
-            $cleanedContent = trim(strip_tags($content['content']));
-            
-            // Remove excessive line breaks and whitespace
-            $cleanedContent = preg_replace('/\s+/', ' ', $cleanedContent);
-            
-            // Get meaningful content within Facebook limits
-            $contentExtract = $this->extractMeaningfulContent($cleanedContent, 1000);
-            
-            if ($contentExtract) {
-                $lines[] = $contentExtract;
-            }
-            
-            // Add call to action if we have a URL
-            if (!empty($content['url']) && !str_contains($content['url'], 'localhost')) {
-                $lines[] = "Read the full article: " . $content['url'];
-            }
-        }
-
-        // Join with proper spacing
-        $finalMessage = implode("\n\n", array_filter($lines));
-        
-        // Ensure we don't exceed Facebook's limit
-        if (strlen($finalMessage) > 63000) {
-            $finalMessage = substr($finalMessage, 0, 62997) . '...';
-        }
-        
-        return $finalMessage;
     }
 
     /**
@@ -357,7 +344,7 @@ class SocialMediaService
         }
 
         $pageId = config('services.facebook.page_id');
-        $token = $this->resolveFacebookPageAccessToken();
+        $token  = $this->resolveFacebookPageAccessToken();
 
         if (!$pageId || !$token) {
             return false;
@@ -394,7 +381,6 @@ class SocialMediaService
         }
 
         $token = $this->resolveFacebookPageAccessToken();
-
         if (!$token) {
             return false;
         }
@@ -423,10 +409,11 @@ class SocialMediaService
         }
 
         $token = $this->resolveFacebookPageAccessToken();
-
         if (!$token) {
             return false;
         }
+
+        $message = $this->normalizeText($message);
 
         $response = Http::asForm()->post("https://graph.facebook.com/{$postId}", [
             'access_token' => $token,
@@ -452,7 +439,6 @@ class SocialMediaService
         }
 
         $token = $this->resolveFacebookPageAccessToken();
-
         if (!$token) {
             return false;
         }
@@ -465,7 +451,7 @@ class SocialMediaService
             return true;
         }
 
-        Log::error('Facebook deletePost failed: ' . $response->body());
+        Log::error('Facebook deletePost failed: ' . $response->body()); // FIX
         return false;
     }
 
@@ -480,7 +466,6 @@ class SocialMediaService
         }
 
         $token = $this->resolveFacebookPageAccessToken();
-
         if (!$token) {
             return false;
         }
@@ -504,10 +489,11 @@ class SocialMediaService
         }
 
         $token = $this->resolveFacebookPageAccessToken();
-
         if (!$token) {
             return false;
         }
+
+        $comment = $this->normalizeText($comment);
 
         $response = Http::post("https://graph.facebook.com/{$postId}/comments", [
             'access_token' => $token,
@@ -524,14 +510,13 @@ class SocialMediaService
     {
         // Get the original post
         $post = $this->getPost($sourcePlatform, $postId);
-        
         if (!$post) {
             return false;
         }
 
         // Prepare content for the target platform
         $content = [
-            'message' => $message ?? $post['message'] ?? '',
+            'message' => $message ?? ($post['message'] ?? ''),
             'title' => 'Shared Post',
         ];
 
@@ -562,7 +547,7 @@ class SocialMediaService
         return false;
     }
 
-    // Instagram and LinkedIn methods (simplified since they're not being used)
+    // Instagram and LinkedIn stubs
     private function publishToInstagram(array $content) { return false; }
     private function publishToLinkedIn(array $content) { return false; }
 }
