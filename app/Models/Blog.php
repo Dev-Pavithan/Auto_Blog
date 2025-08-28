@@ -20,23 +20,41 @@ class Blog extends Model
         'article_status',
         'slug',
         'social_media_platforms',
-        'published_at',
-        'social_media_published'
+        'social_media_published',
+        'social_media_post_id',
+        'social_media_post_ids',
+        'social_media_facebook_post_id',
+        'social_media_instagram_post_id',
+        'social_media_twitter_post_id',
+        'social_media_linkedin_post_id',
+        'published_at'
     ];
 
     protected $casts = [
         'social_media_platforms' => 'array',
-        'published_at' => 'datetime',
-        'social_media_published' => 'boolean'
+        'social_media_post_ids' => 'array',
+        'social_media_published' => 'boolean',
+        'published_at' => 'datetime'
     ];
 
-    public function user()
+    // Add these accessors for convenience
+    public function getFacebookPostIdAttribute()
     {
-        return $this->belongsTo(User::class);
+        return $this->social_media_facebook_post_id;
     }
 
-    public function scopeForUser($query, $userId)
+    public function getInstagramPostIdAttribute()
     {
-        return $query->where('user_id', $userId);
+        return $this->social_media_instagram_post_id;
+    }
+
+    public function getTwitterPostIdAttribute()
+    {
+        return $this->social_media_twitter_post_id;
+    }
+
+    public function getLinkedinPostIdAttribute()
+    {
+        return $this->social_media_linkedin_post_id;
     }
 }

@@ -24,6 +24,13 @@ class BlogController extends Controller
         'facebook', 'instagram', 'linkedin'
     ];
 
+    // Facebook character limits for validation
+    private $facebookLimits = [
+        'title' => 255,
+        'description' => 500,
+        'content' => 63000
+    ];
+
     protected $socialMediaService;
 
     public function __construct(SocialMediaService $socialMediaService)
@@ -81,38 +88,31 @@ class BlogController extends Controller
     }
 
     /**
- * Display the specified blog post.
- */
-public function show($id)
-{
-    $blog = Blog::find($id);
-    
-    if (!$blog) {
-        return response()->json([
-            'message' => 'Blog not found'
-        ], 404);
+     * Display the specified blog post.
+     */
+    public function show($id)
+    {
+        $blog = Blog::find($id);
+        
+        if (!$blog) {
+            return response()->json([
+                'message' => 'Blog not found'
+            ], 404);
+        }
+        
+        return response()->json($blog);
     }
-    
-    // Remove this restriction to allow access to all blogs regardless of status
-    // if ($blog->article_status !== 'published') {
-    //     return response()->json([
-    //         'message' => 'Blog not available'
-    //     ], 403);
-    // }
-    
-    return response()->json($blog);
-}
 
     /**
      * Store a newly created blog post.
      */
-    public function store(Request $request)
+     public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'article_title' => 'required|string|max:255',
+            'article_title' => 'required|string|max:' . $this->facebookLimits['title'],
             'article_type' => 'required|string',
-            'article_short_desc' => 'required|string|max:500',
-            'article_long_desc' => 'required|string',
+            'article_short_desc' => 'required|string|max:' . $this->facebookLimits['description'],
+            'article_long_desc' => 'required|string|max:' . $this->facebookLimits['content'],
             'article_image' => 'nullable|url',
             'article_video_url' => 'nullable|url',
             'article_document' => 'nullable|file|mimes:pdf,doc,docx,txt,ppt,pptx,xls,xlsx|max:10240',
@@ -120,6 +120,9 @@ public function show($id)
             'social_media_platforms' => 'nullable|array',
             'social_media_platforms.*' => 'in:' . implode(',', $this->socialMediaPlatforms)
         ], [
+            'article_title.max' => 'The title must not exceed ' . $this->facebookLimits['title'] . ' characters for Facebook compatibility.',
+            'article_short_desc.max' => 'The short description must not exceed ' . $this->facebookLimits['description'] . ' characters for Facebook compatibility.',
+            'article_long_desc.max' => 'The content must not exceed ' . $this->facebookLimits['content'] . ' characters for Facebook compatibility.',
             'article_document.file' => 'The article document must be a file upload.',
             'article_document.mimes' => 'The document must be a PDF, Word, Text, PowerPoint, or Excel file.',
             'article_document.max' => 'The document must not exceed 10MB in size.',
@@ -132,6 +135,14 @@ public function show($id)
             ], 422);
         }
 
+        // Additional validation for social media publishing
+        if ($request->article_status === 'published' && $request->has('social_media_platforms')) {
+            $validationResult = $this->validateForSocialMedia($request);
+            if ($validationResult !== true) {
+                return $validationResult;
+            }
+        }
+
         $slug = Str::slug($request->article_title);
         $counter = 1;
         
@@ -140,13 +151,15 @@ public function show($id)
             $counter++;
         }
 
-        // Handle file upload
+        // Handle file upload - ONLY if a file was actually provided
         $articleDocumentPath = null;
         if ($request->hasFile('article_document')) {
             $articleDocumentPath = $this->handleDocumentUpload($request->file('article_document'));
         } else if ($request->filled('article_document') && filter_var($request->article_document, FILTER_VALIDATE_URL)) {
+            // If it's a URL, store it directly
             $articleDocumentPath = $request->article_document;
         }
+        // If no document is provided, articleDocumentPath remains null
 
         $blogData = [
             'article_title' => $request->article_title,
@@ -155,7 +168,7 @@ public function show($id)
             'article_long_desc' => $request->article_long_desc,
             'article_image' => $request->article_image,
             'article_video_url' => $request->article_video_url,
-            'article_document' => $articleDocumentPath,
+            'article_document' => $articleDocumentPath, // This will be null if no document
             'article_status' => $request->article_status,
             'slug' => $slug,
         ];
@@ -195,21 +208,58 @@ public function show($id)
         return response()->json($blog, 201);
     }
 
+
+    /**
+     * Validate blog content for social media publishing
+     */
+    private function validateForSocialMedia(Request $request)
+    {
+        $errors = [];
+
+        // Check if title is empty
+        if (empty(trim($request->article_title))) {
+            $errors['article_title'] = ['Title is required for social media publishing'];
+        }
+
+        // Check if description is empty
+        if (empty(trim($request->article_short_desc))) {
+            $errors['article_short_desc'] = ['Short description is required for social media publishing'];
+        }
+
+        // Check if content is empty
+        if (empty(trim(strip_tags($request->article_long_desc)))) {
+            $errors['article_long_desc'] = ['Content is required for social media publishing'];
+        }
+
+        if (!empty($errors)) {
+            return response()->json([
+                'message' => 'Social media publishing validation failed',
+                'errors' => $errors
+            ], 422);
+        }
+
+        return true;
+    }
+
     /**
      * Update the specified blog post.
      */
     public function update(Request $request, $id)
     {
         $validator = Validator::make($request->all(), [
-            'article_title' => 'sometimes|required|string|max:255',
+            'article_title' => 'sometimes|required|string|max:' . $this->facebookLimits['title'],
             'article_type' => 'sometimes|required|string|max:255',
-            'article_short_desc' => 'sometimes|required|string|max:500',
-            'article_long_desc' => 'sometimes|required|string',
+            'article_short_desc' => 'sometimes|required|string|max:' . $this->facebookLimits['description'],
+            'article_long_desc' => 'sometimes|required|string|max:' . $this->facebookLimits['content'],
             'article_image' => 'sometimes|nullable|url',
             'article_video_url' => 'sometimes|nullable|url',
             'article_status' => 'sometimes|required|in:deactive,active,published',
             'social_media_platforms' => 'nullable|array',
             'social_media_platforms.*' => 'in:' . implode(',', $this->socialMediaPlatforms)
+        ], [
+            'article_title.max' => 'The title must not exceed ' . $this->facebookLimits['title'] . ' characters for Facebook compatibility.',
+            'article_short_desc.max' => 'The short description must not exceed ' . $this->facebookLimits['description'] . ' characters for Facebook compatibility.',
+            'article_long_desc.max' => 'The content must not exceed ' . $this->facebookLimits['content'] . ' characters for Facebook compatibility.'
         ]);
 
         if ($validator->fails()) {
@@ -276,6 +326,12 @@ public function show($id)
             if (!empty($socialMediaPlatforms)) {
                 Log::info("Attempting to publish blog ID {$blog->id} to social media platforms: " . implode(', ', $socialMediaPlatforms));
                 
+                // FIX: Use the blog data for validation, not request data
+                $validationResult = $this->validateBlogForSocialMedia($blog, $validData);
+                if ($validationResult !== true) {
+                    return $validationResult;
+                }
+                
                 $publishSuccess = $this->publishToSocialMedia($blog, $socialMediaPlatforms);
                 
                 if (!$publishSuccess) {
@@ -305,6 +361,45 @@ public function show($id)
             'data' => $blog
         ]);
     }
+
+    /**
+     * Validate blog content for social media publishing (FIXED VERSION)
+     */
+    private function validateBlogForSocialMedia(Blog $blog, array $updateData = [])
+    {
+        $errors = [];
+
+        // Use updated data if available, otherwise use blog data
+        $title = $updateData['article_title'] ?? $blog->article_title;
+        $description = $updateData['article_short_desc'] ?? $blog->article_short_desc;
+        $content = $updateData['article_long_desc'] ?? $blog->article_long_desc;
+
+        // Check if title is empty
+        if (empty(trim($title))) {
+            $errors['article_title'] = ['Title is required for social media publishing'];
+        }
+
+        // Check if description is empty
+        if (empty(trim($description))) {
+            $errors['article_short_desc'] = ['Short description is required for social media publishing'];
+        }
+
+        // Check if content is empty
+        if (empty(trim(strip_tags($content)))) {
+            $errors['article_long_desc'] = ['Content is required for social media publishing'];
+        }
+
+        if (!empty($errors)) {
+            return response()->json([
+                'message' => 'Social media publishing validation failed',
+                'errors' => $errors
+            ], 422);
+        }
+
+        return true;
+    }
+
+
 
     // Add this method to your BlogController
 private function verifySocialMediaCredentials(array $platforms)

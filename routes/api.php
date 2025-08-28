@@ -1,10 +1,24 @@
 <?php
 
+use App\Models\Blog;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\BlogController;
 use App\Http\Controllers\ImageController;
-use Illuminate\Support\Facades\Route;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
+use App\Http\Controllers\SocialPostController;
+
+Route::prefix('social-posts')->controller(SocialPostController::class)->group(function () {
+    Route::get('/', 'index');                                   // list
+    Route::get('{platform}/{postId}', 'show');                  // view
+    Route::put('{platform}/{postId}', 'update');                // edit message
+    Route::delete('{platform}/{postId}', 'destroy');            // delete
+    Route::post('republish/{blog}', 'republish');               // republish a blog
+});
+
+Route::post('/social-posts/boost/{platform}/{postId}', [SocialPostController::class, 'boost']);
+Route::post('/social-posts/share/{platform}/{postId}', [SocialPostController::class, 'share']);
+Route::post('/social-posts/comment/{platform}/{postId}', [SocialPostController::class, 'comment']);
 
 // Blog routes - all publicly accessible
 Route::get('/blogs', [BlogController::class, 'index']);
