@@ -39,27 +39,6 @@
                         </a>
 
                         @if (Route::has('register'))
-                        @endif
-            @endif
-        </header>
-
-        <!-- Show all blogs from database -->
-        <section class="w-full lg:max-w-4xl max-w-[335px] mt-8">
-            @if(isset($blogs) && count($blogs))
-                @foreach($blogs as $blog)
-                    <div class="mb-8 p-4 border rounded-lg bg-white shadow">
-                        <h2 class="text-xl font-bold mb-2">{{ $blog->article_title }}</h2>
-                        @if($blog->article_image)
-                            <img src="{{ $blog->article_image }}" alt="Blog Image" style="max-width:400px; width:100%; height:auto; border-radius:8px;" />
-                        @endif
-                        <p class="mt-2 text-gray-700">{{ $blog->article_short_desc }}</p>
-                        <p class="mt-1 text-gray-500 text-sm">Type: {{ $blog->article_type }}</p>
-                    </div>
-                @endforeach
-            @else
-                <p class="text-center text-gray-500">No blogs found.</p>
-            @endif
-        </section>
                             <a
                                 href="{{ route('register') }}"
                                 class="inline-block px-5 py-1.5 dark:text-[#EDEDEC] border-[#19140035] hover:border-[#1915014a] border text-[#1b1b18] dark:border-[#3E3E3A] dark:hover:border-[#62605b] rounded-sm text-sm leading-normal">
