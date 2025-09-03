@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Storage;
 use App\Services\SocialMediaService;
+use Illuminate\Support\Facades\Log;
 
 class BlogController extends Controller
 {
@@ -18,10 +19,10 @@ class BlogController extends Controller
         'published' => [] // No transitions allowed after published
     ];
 
-    // Define available social media platforms
+    // Define available social media platforms (only Facebook remains)
     private $socialMediaPlatforms = [
-        'facebook', 'instagram', 'linkedin'
-    ];
+    'facebook', 'instagram'
+];
 
     protected $socialMediaService;
 
@@ -80,27 +81,20 @@ class BlogController extends Controller
     }
 
     /**
- * Display the specified blog post.
- */
-public function show($id)
-{
-    $blog = Blog::find($id);
-    
-    if (!$blog) {
-        return response()->json([
-            'message' => 'Blog not found'
-        ], 404);
+     * Display the specified blog post.
+     */
+    public function show($id)
+    {
+        $blog = Blog::find($id);
+        
+        if (!$blog) {
+            return response()->json([
+                'message' => 'Blog not found'
+            ], 404);
+        }
+        
+        return response()->json($blog);
     }
-    
-    // Remove this restriction to allow access to all blogs regardless of status
-    // if ($blog->article_status !== 'published') {
-    //     return response()->json([
-    //         'message' => 'Blog not available'
-    //     ], 403);
-    // }
-    
-    return response()->json($blog);
-}
 
     /**
      * Store a newly created blog post.
@@ -244,9 +238,12 @@ public function show($id)
         if ($request->has('social_media_platforms')) {
             $socialMediaPlatforms = array_intersect($request->social_media_platforms, $this->socialMediaPlatforms);
             $validData['social_media_platforms'] = json_encode(array_values($socialMediaPlatforms));
+        } else {
+            // If platforms not provided in request, use existing ones
+            $socialMediaPlatforms = json_decode($blog->social_media_platforms, true) ?? [];
         }
 
-        // If status changed to published, try to publish to social media first
+        // If status changed to published, try to publish to social media
         if ($isPublishing && !empty($socialMediaPlatforms)) {
             $publishSuccess = $this->publishToSocialMedia($blog, $socialMediaPlatforms);
             
@@ -268,57 +265,6 @@ public function show($id)
             'data' => $blog
         ]);
     }
-
-    // Add this method to your BlogController
-private function verifySocialMediaCredentials(array $platforms)
-{
-    foreach ($platforms as $platform) {
-        $verification = $this->socialMediaService->verifyCredentials($platform);
-        if (!$verification) {
-            Log::error("Failed to verify credentials for platform: {$platform}");
-            return false;
-        }
-        Log::info("Verified credentials for {$platform}: " . json_encode($verification));
-    }
-    return true;
-}
-
-// Then update your publishToSocialMedia method:
-private function publishToSocialMedia(Blog $blog, array $platforms)
-{
-    try {
-        // Verify credentials first
-        if (!$this->verifySocialMediaCredentials($platforms)) {
-            Log::error('Social media credential verification failed');
-            return false;
-        }
-
-        $successCount = 0;
-        
-        foreach ($platforms as $platform) {
-            $result = $this->socialMediaService->publish($platform, [
-                'title' => $blog->article_title,
-                'content' => $blog->article_short_desc,
-                'image' => $blog->article_image,
-                'url' => url('/blog/' . $blog->slug),
-                'description' => $blog->article_short_desc
-            ]);
-            
-            if ($result) {
-                $successCount++;
-                Log::info("Successfully published to {$platform} for blog: " . $blog->id);
-            } else {
-                Log::warning("Failed to publish to {$platform} for blog: " . $blog->id);
-            }
-        }
-
-        return $successCount > 0;
-
-    } catch (\Exception $e) {
-        Log::error('Social media publishing failed: ' . $e->getMessage());
-        return false;
-    }
-}
 
     /**
      * Update the document of the specified blog post.
@@ -384,17 +330,17 @@ private function publishToSocialMedia(Blog $blog, array $platforms)
     public function byStatus(Request $request)
     {
         $status = $request->query('status');
-        
+
         if (!$status) {
             return response()->json([
                 'message' => 'Status parameter is required'
             ], 400);
         }
-        
+
         $blogs = Blog::where('article_status', $status)
             ->orderBy('created_at', 'desc')
             ->paginate(10);
-            
+
         return response()->json($blogs);
     }
 
@@ -442,4 +388,66 @@ private function publishToSocialMedia(Blog $blog, array $platforms)
     {
         return implode(', ', $this->statusTransitions[$currentStatus]);
     }
+
+
+
+// And update the publishToSocialMedia method:
+private function publishToSocialMedia(Blog $blog, array $platforms)
+{
+    try {
+        $successCount = 0;
+        $postIds = [];
+        
+        Log::info("Starting social media publishing for blog: {$blog->id}");
+        
+        $publicUrl = 'https://your-actual-domain.com/blog/' . $blog->slug;
+        
+        foreach ($platforms as $platform) {
+            Log::info("Publishing to {$platform} for blog: {$blog->id}");
+            
+            $result = $this->socialMediaService->publish($platform, [
+                'title' => $blog->article_title,
+                'type' => $blog->article_type,
+                'short_desc' => $blog->article_short_desc,
+                'long_desc' => $blog->article_long_desc,
+                'image' => $blog->article_image,
+                'video_url' => $blog->article_video_url,
+                'document' => $blog->article_document,
+                'url' => $publicUrl
+            ]);
+            
+            if ($result) {
+                $successCount++;
+                Log::info("Successfully published to {$platform} for blog: {$blog->id}");
+                
+                $postIds[$platform] = is_string($result) ? $result : 'success';
+                
+                $postIdField = "social_media_{$platform}_post_id";
+                if (isset($blog->$postIdField)) {
+                    $blog->$postIdField = $result;
+                }
+            } else {
+                Log::warning("Failed to publish to {$platform} for blog: {$blog->id}");
+            }
+        }
+
+        $updateData = [
+            'social_media_published' => $successCount > 0,
+            'social_media_post_ids' => json_encode($postIds)
+        ];
+        
+        if ($successCount > 0) {
+            $updateData['published_at'] = now();
+        }
+
+        $blog->update($updateData);
+
+        return $successCount > 0;
+
+    } catch (\Exception $e) {
+        Log::error('Social media publishing failed: ' . $e->getMessage());
+        $blog->update(['social_media_published' => false]);
+        return false;
+    }
+}
 }
