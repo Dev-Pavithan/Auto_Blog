@@ -35,8 +35,8 @@ class SocialMediaService
         $accessToken = config('services.facebook.access_token');
         $pageId = config('services.facebook.page_id');
 
-        if (!$accessToken) {
-            Log::warning('Facebook access token not configured');
+        if (!$accessToken || !$pageId) {
+            Log::warning('Facebook access token or page ID not configured');
             return false;
         }
 
@@ -58,52 +58,18 @@ class SocialMediaService
             return false;
         }
 
-        $tokenType = $debugData['type'] ?? 'UNKNOWN';
-        Log::info("Facebook token type: {$tokenType}");
-
-        // For all token types, use the correct ID
-        $targetPageId = ($tokenType === 'PAGE') 
-            ? $debugData['profile_id'] 
-            : (config('services.facebook.page_id') ?: $debugData['user_id']);
-        
-        if (!$targetPageId) {
-            Log::error('Could not determine target page ID');
-            return false;
-        }
-
-        Log::info("Target page ID: {$targetPageId}");
-        return $this->makeFacebookPost($targetPageId, $accessToken, $content);
-    }
-
-    private function makeFacebookPost($pageId, $accessToken, $content)
-    {
-        $targetPageId = config('services.facebook.page_id') ?: $pageId;
-        
-        if (!$targetPageId) {
-            Log::error('No target page ID specified for Facebook post');
-            return false;
-        }
-
         // Build the post message with full content
         $message = $this->buildFacebookMessage($content);
 
         Log::info("Facebook post content:", [
-            'title' => $content['title'] ?? '',
-            'type' => $content['type'] ?? '',
-            'short_desc' => $content['short_desc'] ?? '',
-            'long_desc' => $content['long_desc'] ?? '',
-            'image' => $content['image'] ?? '',
-            'video_url' => $content['video_url'] ?? '',
-            'document' => $content['document'] ?? '',
-            'url' => $content['url'] ?? '',
             'message_length' => strlen($message),
-            'target_page_id' => $targetPageId
+            'target_page_id' => $pageId
         ]);
 
         // Handle image upload to Facebook
         $imageAttachment = null;
         if (!empty($content['image'])) {
-            $imageAttachment = $this->uploadImageToFacebook($content['image'], $targetPageId, $accessToken);
+            $imageAttachment = $this->uploadImageToFacebook($content['image'], $pageId, $accessToken);
         }
 
         $payload = [
@@ -121,10 +87,10 @@ class SocialMediaService
             $payload['link'] = $content['url'];
         }
 
-        Log::info("Posting to Facebook page {$targetPageId}");
+        Log::info("Posting to Facebook page {$pageId}");
 
         try {
-            $response = Http::post("https://graph.facebook.com/v23.0/{$targetPageId}/feed", $payload);
+            $response = Http::post("https://graph.facebook.com/v23.0/{$pageId}/feed", $payload);
 
             if ($response->failed()) {
                 $error = $response->json();
@@ -207,7 +173,7 @@ class SocialMediaService
         if (!empty($content['long_desc'])) {
             // Clean up the content by removing HTML tags and extra newlines
             $cleanContent = strip_tags($content['long_desc']);
-            $cleanContent = preg_replace('/\s+/', ' ', $cleanContent); // Replace multiple spaces/newlines with single space
+            $cleanContent = preg_replace('/\s+/', ' ', $cleanContent);
             $cleanContent = trim($cleanContent);
             
             // Add the full content to the message
@@ -259,9 +225,92 @@ class SocialMediaService
 
         Log::info("Publishing to Instagram Business Account: {$instagramAccountId}");
 
-        // Note: Instagram publishing requires additional permissions and steps
-        // For now, we'll just return true for testing purposes
-        return true;
+        // Build Instagram caption (similar to Facebook but shorter)
+        $caption = $this->buildInstagramCaption($content);
+
+        try {
+            // For Instagram, we need to create a media container first
+            $mediaResponse = Http::post("https://graph.facebook.com/v23.0/{$instagramAccountId}/media", [
+                'access_token' => $userAccessToken,
+                'caption' => $caption,
+                'image_url' => $content['image'] ?? null,
+            ]);
+
+            if ($mediaResponse->failed()) {
+                Log::error('Instagram media creation failed: ' . $mediaResponse->body());
+                return false;
+            }
+
+            $mediaData = $mediaResponse->json();
+            $mediaId = $mediaData['id'] ?? null;
+
+            if (!$mediaId) {
+                Log::error('No media ID returned from Instagram');
+                return false;
+            }
+
+            // Now publish the media
+            $publishResponse = Http::post("https://graph.facebook.com/v23.0/{$instagramAccountId}/media_publish", [
+                'access_token' => $userAccessToken,
+                'creation_id' => $mediaId,
+            ]);
+
+            if ($publishResponse->successful()) {
+                $publishData = $publishResponse->json();
+                $postId = $publishData['id'] ?? null;
+                Log::info("Instagram post created successfully: {$postId}");
+                return $postId;
+            }
+
+            Log::error('Instagram publish failed: ' . $publishResponse->body());
+            return false;
+
+        } catch (\Exception $e) {
+            Log::error('Exception during Instagram post: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Build Instagram caption (shorter version)
+     */
+    private function buildInstagramCaption(array $content): string
+    {
+        $caption = "";
+        
+        // Add title
+        if (!empty($content['title'])) {
+            $caption .= $content['title'] . "\n\n";
+        }
+        
+        // Add short description
+        if (!empty($content['short_desc'])) {
+            $caption .= $content['short_desc'] . "\n\n";
+        }
+        
+        // Truncate long description for Instagram
+        if (!empty($content['long_desc'])) {
+            $cleanContent = strip_tags($content['long_desc']);
+            $cleanContent = preg_replace('/\s+/', ' ', $cleanContent);
+            $cleanContent = trim($cleanContent);
+            
+            // Instagram has a 2200 character limit for captions
+            if (strlen($cleanContent) > 1000) {
+                $cleanContent = substr($cleanContent, 0, 1000) . '...';
+            }
+            
+            $caption .= $cleanContent . "\n\n";
+        }
+
+        // Add link in bio mention (since Instagram doesn't allow clickable links in captions)
+        if (!empty($content['url'])) {
+            $caption .= "🔗 Link in bio\n\n";
+        }
+
+        // Add relevant hashtags
+        $caption .= "#blog #content #news";
+
+        return trim($caption);
     }
 
     /**
@@ -278,18 +327,7 @@ class SocialMediaService
                     ]);
                     
                     if ($response->successful()) {
-                        $data = $response->json();
-                        
-                        // Also get pages to verify page access
-                        $pagesResponse = Http::get("https://graph.facebook.com/me/accounts", [
-                            'access_token' => config('services.facebook.access_token')
-                        ]);
-                        
-                        if ($pagesResponse->successful()) {
-                            $data['pages'] = $pagesResponse->json()['data'] ?? [];
-                        }
-                        
-                        return $data;
+                        return $response->json();
                     }
                     
                     return false;
@@ -301,59 +339,5 @@ class SocialMediaService
             Log::error("Credential verification failed for {$platform}: " . $e->getMessage());
             return false;
         }
-    }
-
-    /**
-     * Debug Facebook token permissions and validity
-     */
-    public function debugFacebookToken()
-    {
-        $accessToken = config('services.facebook.access_token');
-        
-        $response = Http::get("https://graph.facebook.com/debug_token", [
-            'input_token' => $accessToken,
-            'access_token' => $accessToken
-        ]);
-
-        if ($response->successful()) {
-            return $response->json()['data'] ?? [];
-        }
-
-        Log::error('Facebook token debug failed: ' . $response->body());
-        return false;
-    }
-
-    /**
-     * Get Facebook pages for the authenticated user
-     */
-    public function getFacebookPages(): array
-    {
-        $accessToken = config('services.facebook.access_token');
-
-        if (empty($accessToken)) {
-            Log::error('Facebook pages fetch failed: missing access token in config.');
-            return [];
-        }
-
-        try {
-            $response = Http::timeout(20)->get('https://graph.facebook.com/me/accounts', [
-                'access_token' => $accessToken,
-                'fields'       => 'id,name,access_token,category,category_list,tasks',
-                'limit'        => 100,
-            ]);
-
-            if ($response->successful()) {
-                return $response->json('data') ?? [];
-            }
-
-            Log::error('Failed to fetch Facebook pages', [
-                'status' => $response->status(),
-                'body'   => $response->body(),
-            ]);
-        } catch (\Throwable $e) {
-            Log::error('Exception fetching Facebook pages: '.$e->getMessage());
-        }
-
-        return [];
     }
 }

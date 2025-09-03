@@ -13,8 +13,7 @@ return new class extends Migration
             $table->json('social_media_post_ids')->nullable()->after('social_media_post_id');
             $table->string('social_media_facebook_post_id')->nullable()->after('social_media_post_ids');
             $table->string('social_media_instagram_post_id')->nullable()->after('social_media_facebook_post_id');
-            $table->string('social_media_twitter_post_id')->nullable()->after('social_media_instagram_post_id');
-            $table->string('social_media_linkedin_post_id')->nullable()->after('social_media_twitter_post_id');
+            // Removed twitter and linkedin fields
         });
     }
 
@@ -25,9 +24,7 @@ return new class extends Migration
                 'social_media_post_id',
                 'social_media_post_ids',
                 'social_media_facebook_post_id',
-                'social_media_instagram_post_id',
-                'social_media_twitter_post_id',
-                'social_media_linkedin_post_id'
+                'social_media_instagram_post_id'
             ]);
         });
     }

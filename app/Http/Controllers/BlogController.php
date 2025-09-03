@@ -19,10 +19,10 @@ class BlogController extends Controller
         'published' => [] // No transitions allowed after published
     ];
 
-    // Define available social media platforms (only Facebook remains)
+    // Define available social media platforms
     private $socialMediaPlatforms = [
-    'facebook', 'instagram'
-];
+        'facebook', 'instagram'
+    ];
 
     protected $socialMediaService;
 
@@ -176,13 +176,13 @@ class BlogController extends Controller
     public function update(Request $request, $id)
     {
         $validator = Validator::make($request->all(), [
-            'article_title' => 'sometimes|required|string|max:255',
-            'article_type' => 'sometimes|required|string|max:255',
-            'article_short_desc' => 'sometimes|required|string|max:500',
-            'article_long_desc' => 'sometimes|required|string',
-            'article_image' => 'sometimes|nullable|url',
-            'article_video_url' => 'sometimes|nullable|url',
-            'article_status' => 'sometimes|required|in:deactive,active,published',
+            'article_title' => 'sometimes|string|max:255',
+            'article_type' => 'sometimes|string|max:255',
+            'article_short_desc' => 'sometimes|string|max:500',
+            'article_long_desc' => 'sometimes|string',
+            'article_image' => 'nullable|url',
+            'article_video_url' => 'nullable|url',
+            'article_status' => 'sometimes|in:deactive,active,published',
             'social_media_platforms' => 'nullable|array',
             'social_media_platforms.*' => 'in:' . implode(',', $this->socialMediaPlatforms)
         ]);
@@ -272,9 +272,8 @@ class BlogController extends Controller
     public function updateDocument(Request $request, $id)
     {
         $request->validate([
-            'article_document' => 'required|file|mimes:pdf,doc,docx,txt,ppt,pptx,xls,xlsx|max:10240'
+            'article_document' => 'nullable|file|mimes:pdf,doc,docx,txt,ppt,pptx,xls,xlsx|max:10240'
         ], [
-            'article_document.required' => 'Document file is required.',
             'article_document.file' => 'The article document must be a file upload.',
             'article_document.mimes' => 'The document must be a PDF, Word, Text, PowerPoint, or Excel file.',
             'article_document.max' => 'The document must not exceed 10MB in size.'
@@ -282,17 +281,23 @@ class BlogController extends Controller
 
         $blog = Blog::findOrFail($id);
 
-        // Delete old document if it exists and is a local file
-        if ($blog->article_document && !filter_var($blog->article_document, FILTER_VALIDATE_URL)) {
-            $this->deleteDocument($blog->article_document);
+        // Handle document update or removal
+        if ($request->hasFile('article_document')) {
+            // Delete old document if it exists and is a local file
+            if ($blog->article_document && !filter_var($blog->article_document, FILTER_VALIDATE_URL)) {
+                $this->deleteDocument($blog->article_document);
+            }
+
+            // Upload new document
+            $articleDocumentPath = $this->handleDocumentUpload($request->file('article_document'));
+            $blog->update(['article_document' => $articleDocumentPath]);
+        } else if ($request->has('article_document') && $request->article_document === null) {
+            // Remove document if null is provided
+            if ($blog->article_document && !filter_var($blog->article_document, FILTER_VALIDATE_URL)) {
+                $this->deleteDocument($blog->article_document);
+            }
+            $blog->update(['article_document' => null]);
         }
-
-        // Upload new document
-        $articleDocumentPath = $this->handleDocumentUpload($request->file('article_document'));
-
-        $blog->update([
-            'article_document' => $articleDocumentPath
-        ]);
 
         return response()->json([
             'message' => 'Document updated successfully',
@@ -389,9 +394,9 @@ class BlogController extends Controller
         return implode(', ', $this->statusTransitions[$currentStatus]);
     }
 
-
-
-// And update the publishToSocialMedia method:
+    /**
+ * Publish blog to social media platforms.
+ */
 private function publishToSocialMedia(Blog $blog, array $platforms)
 {
     try {
@@ -422,10 +427,9 @@ private function publishToSocialMedia(Blog $blog, array $platforms)
                 
                 $postIds[$platform] = is_string($result) ? $result : 'success';
                 
+                // Store platform-specific post ID
                 $postIdField = "social_media_{$platform}_post_id";
-                if (isset($blog->$postIdField)) {
-                    $blog->$postIdField = $result;
-                }
+                $blog->$postIdField = is_string($result) ? $result : null;
             } else {
                 Log::warning("Failed to publish to {$platform} for blog: {$blog->id}");
             }
@@ -436,10 +440,19 @@ private function publishToSocialMedia(Blog $blog, array $platforms)
             'social_media_post_ids' => json_encode($postIds)
         ];
         
+        // Add platform-specific post IDs to update data
+        foreach ($platforms as $platform) {
+            $postIdField = "social_media_{$platform}_post_id";
+            if (isset($blog->$postIdField)) {
+                $updateData[$postIdField] = $blog->$postIdField;
+            }
+        }
+        
         if ($successCount > 0) {
             $updateData['published_at'] = now();
         }
 
+        // Update the blog with all the data
         $blog->update($updateData);
 
         return $successCount > 0;
