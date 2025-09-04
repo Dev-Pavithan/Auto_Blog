@@ -57,6 +57,86 @@ Route::get('/debug-facebook-token', function () {
         'user_id' => $data['data']['user_id'] ?? null
     ]);
 });
+Route::get('/test-instagram-connection', function () {
+    try {
+        $pageId = config('services.facebook.page_id');
+        $accessToken = config('services.facebook.access_token');
+
+        if (!$accessToken || !$pageId) {
+            return response()->json(['error' => 'Facebook credentials not configured'], 400);
+        }
+
+        // Get Instagram account info
+        $response = Http::get("https://graph.facebook.com/v23.0/{$pageId}", [
+            'access_token' => $accessToken,
+            'fields' => 'instagram_business_account{id,name,username,profile_picture_url,followers_count}'
+        ]);
+
+        if ($response->failed()) {
+            return response()->json([
+                'error' => 'Failed to fetch Instagram connection',
+                'response' => $response->body()
+            ], 400);
+        }
+
+        $data = $response->json();
+        $instagramAccount = $data['instagram_business_account'] ?? null;
+
+        if (!$instagramAccount) {
+            return response()->json([
+                'error' => 'No Instagram Business account connected',
+                'data' => $data
+            ], 400);
+        }
+
+        return response()->json([
+            'success' => true,
+            'instagram_account' => $instagramAccount,
+            'config' => [
+                'page_id' => $pageId,
+                'has_token' => !empty($accessToken)
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'error' => 'Exception: ' . $e->getMessage()
+        ], 500);
+    }
+});
+
+Route::post('/test-instagram-post', function (App\Services\SocialMediaService $socialService) {
+    try {
+        $content = [
+            'title' => 'Test Instagram Post',
+            'short_desc' => 'This is a test post to Instagram from our Laravel application',
+            'long_desc' => 'This is a longer description for testing Instagram integration. Instagram has character limits for captions, so we need to ensure our content fits within those limits.',
+            'image' => 'https://picsum.photos/1080/1080', // Use a test image that's definitely accessible
+            'url' => 'https://example.com'
+        ];
+
+        $result = $socialService->publish('instagram', $content);
+
+        if ($result) {
+            return response()->json([
+                'success' => true,
+                'post_id' => $result,
+                'message' => 'Instagram post created successfully'
+            ]);
+        }
+
+        return response()->json([
+            'success' => false,
+            'error' => 'Instagram post failed (check logs for details)'
+        ], 400);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'error' => $e->getMessage()
+        ], 500);
+    }
+});
 
 Route::get('/debug/facebook', function (App\Services\SocialMediaService $socialService) {
     try {

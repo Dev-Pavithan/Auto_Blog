@@ -193,21 +193,21 @@ class SocialMediaService
         return trim($message);
     }
 
-    private function publishToInstagram(array $content)
-    {
-        // For Instagram Business accounts only
-        $pageId = config('services.facebook.page_id');
-        $userAccessToken = config('services.facebook.access_token');
+private function publishToInstagram(array $content)
+{
+    $pageId = config('services.facebook.page_id');
+    $accessToken = config('services.facebook.access_token');
 
-        if (!$pageId) {
-            Log::warning('Instagram publishing requires a Facebook Page ID');
-            return false;
-        }
+    if (!$accessToken || !$pageId) {
+        Log::warning('Instagram requires Facebook access token and page ID');
+        return false;
+    }
 
-        // First, check if the page is connected to an Instagram account
-        $instagramAccountResponse = Http::get("https://graph.facebook.com/{$pageId}", [
-            'access_token' => $userAccessToken,
-            'fields' => 'instagram_business_account'
+    try {
+        // Get Instagram Business Account ID connected to the Facebook Page
+        $instagramAccountResponse = Http::get("https://graph.facebook.com/v23.0/{$pageId}", [
+            'access_token' => $accessToken,
+            'fields' => 'instagram_business_account{id,name,username}'
         ]);
 
         if ($instagramAccountResponse->failed()) {
@@ -225,51 +225,74 @@ class SocialMediaService
 
         Log::info("Publishing to Instagram Business Account: {$instagramAccountId}");
 
-        // Build Instagram caption (similar to Facebook but shorter)
+        // Build Instagram caption
         $caption = $this->buildInstagramCaption($content);
 
-        try {
-            // For Instagram, we need to create a media container first
-            $mediaResponse = Http::post("https://graph.facebook.com/v23.0/{$instagramAccountId}/media", [
-                'access_token' => $userAccessToken,
-                'caption' => $caption,
-                'image_url' => $content['image'] ?? null,
-            ]);
+        // Step 1: Create media container
+        $mediaParams = [
+            'access_token' => $accessToken,
+            'caption' => $caption,
+        ];
 
-            if ($mediaResponse->failed()) {
-                Log::error('Instagram media creation failed: ' . $mediaResponse->body());
-                return false;
-            }
-
-            $mediaData = $mediaResponse->json();
-            $mediaId = $mediaData['id'] ?? null;
-
-            if (!$mediaId) {
-                Log::error('No media ID returned from Instagram');
-                return false;
-            }
-
-            // Now publish the media
-            $publishResponse = Http::post("https://graph.facebook.com/v23.0/{$instagramAccountId}/media_publish", [
-                'access_token' => $userAccessToken,
-                'creation_id' => $mediaId,
-            ]);
-
-            if ($publishResponse->successful()) {
-                $publishData = $publishResponse->json();
-                $postId = $publishData['id'] ?? null;
-                Log::info("Instagram post created successfully: {$postId}");
-                return $postId;
-            }
-
-            Log::error('Instagram publish failed: ' . $publishResponse->body());
-            return false;
-
-        } catch (\Exception $e) {
-            Log::error('Exception during Instagram post: ' . $e->getMessage());
+        // Add image if available - use a direct URL that Facebook can access
+        if (!empty($content['image'])) {
+            $mediaParams['image_url'] = $this->getAccessibleImageUrl($content['image']);
+        } else {
+            Log::error('Instagram post requires an image');
             return false;
         }
+
+        $mediaResponse = Http::post("https://graph.facebook.com/v23.0/{$instagramAccountId}/media", $mediaParams);
+
+        if ($mediaResponse->failed()) {
+            Log::error('Instagram media creation failed: ' . $mediaResponse->body());
+            Log::error('Media params: ' . json_encode($mediaParams));
+            return false;
+        }
+
+        $mediaData = $mediaResponse->json();
+        $mediaId = $mediaData['id'] ?? null;
+
+        if (!$mediaId) {
+            Log::error('No media ID returned from Instagram');
+            return false;
+        }
+
+        // Wait a moment for media processing
+        sleep(5);
+
+        // Step 2: Publish the media
+        $publishResponse = Http::post("https://graph.facebook.com/v23.0/{$instagramAccountId}/media_publish", [
+            'access_token' => $accessToken,
+            'creation_id' => $mediaId,
+        ]);
+
+        if ($publishResponse->successful()) {
+            $publishData = $publishResponse->json();
+            $postId = $publishData['id'] ?? null;
+            Log::info("Instagram post created successfully: {$postId}");
+            return $postId;
+        }
+
+        Log::error('Instagram publish failed: ' . $publishResponse->body());
+        return false;
+
+    } catch (\Exception $e) {
+        Log::error('Exception during Instagram post: ' . $e->getMessage());
+        return false;
     }
+}
+
+private function getAccessibleImageUrl($url)
+{
+    // Pinterest URLs might not be accessible by Facebook's servers
+    // You might need to download and re-upload to a public server
+    if (str_contains($url, 'pinterest.com') || str_contains($url, 'pinimg.com')) {
+        // Consider downloading and storing locally, then providing a public URL
+        Log::warning('Pinterest image URL detected - may not be accessible by Facebook');
+    }
+    return $url;
+}
 
     /**
      * Build Instagram caption (shorter version)

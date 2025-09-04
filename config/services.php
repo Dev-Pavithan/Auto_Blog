@@ -19,7 +19,8 @@ return [
 ],
 
 'instagram' => [
-    'access_token' => env('INSTAGRAM_ACCESS_TOKEN'),
+    'account_id' => env('INSTAGRAM_ACCOUNT_ID'),
+    'access_token' => env('FACEBOOK_ACCESS_TOKEN'), 
 ],
 
 'linkedin' => [

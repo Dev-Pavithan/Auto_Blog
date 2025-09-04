@@ -341,57 +341,102 @@ class SocialMediaPostController extends Controller
         return $response->json();
     }
 
-    // Instagram Methods (Placeholder - requires Business Account)
-    private function getInstagramPosts($limit, $since = null, $until = null)
-    {
-        // Instagram API requires Business Account and additional setup
-        return ['message' => 'Instagram API integration requires Business Account setup'];
-    }
+// Instagram Methods
+private function getInstagramPosts($limit, $since = null, $until = null)
+{
+    try {
+        $accessToken = config('services.facebook.access_token');
+        $instagramAccountId = config('services.instagram.account_id');
 
-    private function getInstagramPost($postId)
-    {
-        return ['message' => 'Instagram API integration requires Business Account setup'];
-    }
+        if (!$accessToken || !$instagramAccountId) {
+            throw new \Exception('Instagram credentials not configured');
+        }
 
-    private function updateInstagramPost($postId, $message)
-    {
-        return ['message' => 'Instagram posts cannot be updated via API'];
-    }
+        $params = [
+            'access_token' => $accessToken,
+            'fields' => 'id,caption,media_type,media_url,permalink,thumbnail_url,timestamp,like_count,comments_count',
+            'limit' => $limit
+        ];
 
-    private function addInstagramComment($postId, $comment)
-    {
-        return ['message' => 'Instagram API integration requires Business Account setup'];
-    }
+        if ($since) $params['since'] = $since;
+        if ($until) $params['until'] = $until;
 
-    private function deleteInstagramPost($postId)
-    {
-        return ['message' => 'Instagram API integration requires Business Account setup'];
-    }
+        $response = Http::get("https://graph.facebook.com/v23.0/{$instagramAccountId}/media", $params);
+        
+        if ($response->failed()) {
+            throw new \Exception($response->body());
+        }
 
-    // LinkedIn Methods (Placeholder - requires additional setup)
-    private function getLinkedInPosts($limit, $since = null, $until = null)
-    {
-        // LinkedIn API requires organization access and additional setup
-        return ['message' => 'LinkedIn API integration requires Organization access setup'];
-    }
+        return $response->json()['data'] ?? [];
 
-    private function getLinkedInPost($postId)
-    {
-        return ['message' => 'LinkedIn API integration requires Organization access setup'];
+    } catch (\Exception $e) {
+        Log::error('Instagram fetch failed: ' . $e->getMessage());
+        return ['error' => 'Failed to fetch Instagram posts: ' . $e->getMessage()];
     }
+}
 
-    private function updateLinkedInPost($postId, $message)
-    {
-        return ['message' => 'LinkedIn posts cannot be updated via API'];
-    }
+private function getInstagramPost($postId)
+{
+    try {
+        $accessToken = config('services.facebook.access_token');
 
-    private function addLinkedInComment($postId, $comment)
-    {
-        return ['message' => 'LinkedIn API integration requires Organization access setup'];
-    }
+        $response = Http::get("https://graph.facebook.com/v23.0/{$postId}", [
+            'access_token' => $accessToken,
+            'fields' => 'id,caption,media_type,media_url,permalink,thumbnail_url,timestamp,like_count,comments_count'
+        ]);
+        
+        if ($response->failed()) {
+            throw new \Exception($response->body());
+        }
 
-    private function deleteLinkedInPost($postId)
-    {
-        return ['message' => 'LinkedIn API integration requires Organization access setup'];
+        return $response->json();
+
+    } catch (\Exception $e) {
+        Log::error('Instagram post fetch failed: ' . $e->getMessage());
+        return ['error' => 'Failed to fetch Instagram post: ' . $e->getMessage()];
     }
+}
+
+private function addInstagramComment($postId, $comment)
+{
+    try {
+        $accessToken = config('services.facebook.access_token');
+
+        $response = Http::post("https://graph.facebook.com/v23.0/{$postId}/comments", [
+            'access_token' => $accessToken,
+            'message' => $comment
+        ]);
+        
+        if ($response->failed()) {
+            throw new \Exception($response->body());
+        }
+
+        return $response->json();
+
+    } catch (\Exception $e) {
+        Log::error('Instagram comment failed: ' . $e->getMessage());
+        return ['error' => 'Failed to add Instagram comment: ' . $e->getMessage()];
+    }
+}
+
+private function deleteInstagramPost($postId)
+{
+    try {
+        $accessToken = config('services.facebook.access_token');
+
+        $response = Http::delete("https://graph.facebook.com/v23.0/{$postId}", [
+            'access_token' => $accessToken
+        ]);
+        
+        if ($response->failed()) {
+            throw new \Exception($response->body());
+        }
+
+        return $response->json();
+
+    } catch (\Exception $e) {
+        Log::error('Instagram delete failed: ' . $e->getMessage());
+        return ['error' => 'Failed to delete Instagram post: ' . $e->getMessage()];
+    }
+}
 }
